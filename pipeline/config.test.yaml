@@ -1,0 +1,29 @@
+# =====================================================================
+# 测试配置:只验证 round0 rifdock 这一步能端到端跑通。
+# ---------------------------------------------------------------------
+# experiment.rounds = 0 -> 编排器只跑种子 rifdock,跳过 round1..N
+# (下游 rfdiffusion/af3/rosetta 需要 GPU/模型,本机暂不实测)。
+# scaffold 用 scaffolds_test(里面 2 个 PDB),输入文件夹由命令行
+# --rifdock-input 指定为 pipeline_code/test_rif/input。
+# =====================================================================
+
+experiment:
+  target: PD-1               # run 目录命名 run_<日期>_PD-1
+  output_root: pipeline_runs # 输出根目录
+  rounds: 0                  # 只跑 round0 rifdock
+  run_name: null
+
+seed:
+  rifdock:
+    target: PD-1.pdb
+    target_res: target_res.list
+    scaffold_subdir: scaffolds_test   # ← 本次测试用这两个 scaffold
+    threads: 16
+    rifgen_extra: ""
+    rifdock_extra: ""
+
+# rounds:0 时下面的循环步骤参数不会被用到,留默认即可。
+defaults:
+  rfdiffusion: {}
+  af3: {}
+  rosetta: {}

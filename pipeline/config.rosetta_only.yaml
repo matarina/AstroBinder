@@ -1,0 +1,55 @@
+# =====================================================================
+# 临时配置:复用已算好的 run_20260706_IL-4Ra,只把 round1 的 Rosetta 续算完。
+# 与 config.yaml 完全一致,唯一差别:rounds 2 -> 1,避免触发 round2 的 GPU 重算。
+# (round0_rifdock / round1 的 rfdiffusion / af3 都有完成标记,自动跳过。)
+# =====================================================================
+
+experiment:
+  target: null
+  output_root: pipeline_runs
+  rounds: 1                        # ← 仅本条与 config.yaml 不同(原为 2)
+  run_name: run_20260706_IL-4Ra    # 复用已算好的实验目录
+
+seed:
+  rifdock:
+    target: null
+    target_res: target_res.list
+    scaffold_subdir: scaffolds
+    threads: 16
+    docking_flag: rifdock.flag
+    rifgen_extra: ""
+    rifdock_extra: ""
+
+defaults:
+  rfdiffusion:
+    num_designs: 8
+    num_seqs: 2
+    temp: "0.2"
+    noise_scale: 0.0
+    seed: 37
+    auto_gpu: true
+    task_vram: 8000
+    gpu_reserve: 0.10
+    gpu_sample: 5
+    gpu: "0"
+
+  af3:
+    auto_gpu: true       # 自动挑空闲卡(每卡一路 AF3 worker,可与别人共享)
+    task_vram: 20000     # AF3 单 worker 估算显存(MiB),比 rfdiffusion 高
+    gpu_reserve: 0.10
+    gpu_sample: 5
+    gpus: "4,5"          # auto_gpu=false 时手动指定;auto_gpu=true 时作为兜底
+    num_seeds: 5
+    force: false
+    keep_fraction: 0.3
+    seed: 1
+
+  rosetta:
+    which: best
+    procs: 36
+    keep: 0.70
+
+rounds:
+  1:
+    rfdiffusion:
+      num_designs: 16

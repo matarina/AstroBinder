@@ -1,0 +1,117 @@
+# =====================================================================
+# Pipeline 统一参数文件
+# ---------------------------------------------------------------------
+# 一处集中配置:全局实验设置 + 每步默认参数 + 每轮覆盖参数。
+# 每个模型的特异性参数都从这里传入,改参数不用动代码。
+# =====================================================================
+
+# ---- 全局实验设置 ----
+experiment:
+  target: null               # 靶点名(用于 run 目录命名 run_<日期>_<靶点>)。留空则自动用输入 PDB 文件名
+  output_root: pipeline_runs # 所有实验输出的根目录
+  rounds: 2                  # 循环轮数(round1..roundN)
+  run_name: run_20260706_IL-4Ra  # 复用已算好 rifdock 的实验目录(round0 有完成标记,自动跳过重算)
+
+# ---- 种子步骤(round0_rifdock,只跑一次)----
+# 这些键对应 scripts/run_rifdock_pipeline.py 的命令行参数。
+# target / target_res / scaffold_subdir 都是【相对 --rifdock-input 文件夹】的名字。
+seed:
+  rifdock:
+    # target 留空:自动扫描输入文件夹顶层的唯一 *.pdb 作为靶点(scaffolds 在子目录不受影响)。
+    # 若顶层有多个 pdb 无法自动确定,再在此手动填相对名,例如 IL-4Rα.pdb
+    target: null                 # 靶点 PDB(相对输入文件夹),留空自动推断
+    target_res: target_res.list  # 热点残基列表(相对输入文件夹)
+    scaffold_subdir: scaffolds   # scaffold 子目录(相对输入文件夹)
+    threads: 16                  # OMP 线程数
+    # 复用已算好的 rifgen 结果:直接用该 flag 顶部的 docking 区块,跳过重算 rifgen。
+    # 相对名相对 --rifdock-input 文件夹解析;区块里的路径须为绝对路径(已指向 PD1 结果)。
+    docking_flag: rifdock.flag
+    rifgen_extra: ""             # 额外 rifgen 参数,直接写进 rifgen.flag
+    rifdock_extra: ""            # 额外 rif_dock 参数,直接写进 rifdock.base.flag
+    # 以下留空则用脚本内置默认(本机 rif 路径/flag 模板),需要时再覆盖:
+    # database: ...
+    # rifgen_bin: ...   rifdock_bin: ...
+    # rifgen_flag: ...  rifdock_flag: ...
+    # force_rifgen: false   skip_rifgen: false
+
+# ---- 每个循环步骤的默认参数 ----
+# 没在 rounds 里覆盖的轮次,都用这里的默认值。
+defaults:
+  rfdiffusion:
+    # 对应 scripts/redesign_pipeline.py(RFdiffusion 重扩散 + ProteinMPNN)
+    num_designs: 8       # 每个输入 PDB 重扩散几个骨架
+    num_seqs: 2          # 每个骨架 MPNN 设计几条序列
+    temp: "0.2"          # MPNN 采样温度
+    noise_scale: 0.0     # RFdiffusion 噪声尺度(越大越多样)
+    seed: 37             # MPNN 随机种子
+    # ---- GPU 自动调度 ----
+    auto_gpu: true       # true=自动检测所有显卡,按空闲显存挑可用卡(每卡一路本流程任务,
+                         #      可与别人已有任务共享);false 才用下面的 gpu 手动指定
+    task_vram: 8000      # 单任务估算显存(MiB),供 auto_gpu 判定某卡放不放得下
+    gpu_reserve: 0.10    # 给别人占用峰值留的冗余比例(峰值×1.1 + 任务显存 ≤ 总显存 才用该卡)
+    gpu_sample: 5        # 显存采样窗口秒数(取窗口内峰值,更安全)
+    gpu: "0"             # auto_gpu=false 时的手动 GPU 编号(逗号分隔=多卡并行)
+    # limit: 0           # 只处理前 N 个 PDB(0=全部,用于冒烟测试)
+    # force: false       # 忽略 .done 标记强制重算
+    # no_trajectory: true  # 不写逐步轨迹 PDB(省盘)
+    # no_thread: true      # 不把序列 thread 回骨架
+
+  af3:
+    # ---- 路线选择 ----
+    # graft(默认): 只折 binder 单链 + 短肽模板 → RIF 骨架叠合回靶标 → RMSD/clash 筛选。
+    #               能约束住 RIF 落回靶标界面, 用 RIF RMSD 直接筛掉没折对的样本。
+    # complex     : 旧路线, A+target 全复合物让 AF3 自主 docking(RIF 常被推离靶标)。
+    mode: graft
+    # ---- AF3 多 GPU 推理(run_af3_batch.py)参数 ----
+    # ---- GPU 自动调度(与 rfdiffusion 一致)----
+    auto_gpu: true       # true=自动检测所有显卡, 按空闲显存挑可用卡(每卡一路 AF3 worker,
+                         #      可与别人已有任务共享);false 才用下面的 gpus 手动指定
+    task_vram: 20000     # 单个 AF3 worker 估算显存(MiB), 供 auto_gpu 判定某卡放不放得下
+                         #      (AF3 权重+推理较重, 默认给 20000, 比 rfdiffusion 高)
+    gpu_reserve: 0.10    # 给别人占用峰值留的冗余比例(峰值×1.1 + 任务显存 ≤ 总显存 才用该卡)
+    gpu_sample: 5        # 显存采样窗口秒数(取窗口内峰值, 更安全)
+    gpus: "4,5"          # auto_gpu=false 时的手动 GPU 编号(逗号分隔=多卡并行);
+                         #      auto_gpu=true 时作为「没挑到空闲卡」的兜底
+    num_seeds: 8         # 每个 sample 的随机种子数;总重复数 = num_seeds × 扩散样本(默认5)。
+                         # graft 靠多采样提高「折对界面几何」的命中率, 建议 ≥8
+    force: false         # true 则忽略"已完成"判断全部重跑
+    # ---- summary.csv → AF3 单链 job(make_af3_monomer_jobs.py)参数 ----
+    keep_fraction: 0.3   # 同 (scaffold,长度) 组内按 mpnn_score 升序保留比例
+    seed: 1              # 生成 json 时写入的 modelSeeds(会被 run_af3_batch 覆盖为随机种子)
+    # 短肽模板覆盖: full=全长骨架(最大限度防短肽大幅变化, 默认) /
+    #               rif=仅RIF残基(非RIF区更自由, 多样性↑但graft通过率↓) / none=无模板
+    template_mode: full
+    # ---- graft 叠合 + 验证(graft_batch.py)参数 ----
+    rmsd_max: 2.0        # RIF align RMSD 上限(Å):超过判定「没折出设计界面几何」,不通过
+    clash_dist: 2.0      # binder↔target 重原子 clash 距离阈值(Å)
+    clash_max: 5         # 允许的 clash 原子对数上限(轻微接触交下游 FastRelax 消除)
+    top: 3               # 每条设计写出通过筛选的前 N 个复合物(按 RIF_RMSD 升序)
+    # af3_python: /home/opt/anaconda3/envs/af3/bin/python  # 覆盖 make_jobs/graft 所用解释器
+
+  rosetta:
+    # 对应 scripts/af3_cif_to_pdb.py + relax_binding.py + filter_binding_top70.py
+    which: best          # AF3 cif→pdb:best=每个设计取最优模型;all=连各 seed-sample 一起转
+    procs: 0             # 同时处理的 PDB 数(relax_binding.py --nproc);0=自动使用可用物理核,每任务固定单进程/单线程
+    rosetta: /mnt/data2/wtk/software/rosetta/rosetta-2025.37-df75a9c
+                         # 自包含 Rosetta 2025.37 安装根目录(含固定 iface14 协议、database、动态库)
+    keep: 0.70           # 筛选每个维度保留比例(filter_binding_top70.py --keep)
+    # ---- 界面 rif 残基数量门槛 ----
+    min_rif: 3           # 每个入选结构界面至少要选出的 rif 残基数;采用累积式随机采样,
+                         #   每轮按玻尔兹曼权重命中后并入集合,达到 min_rif 即停止;
+                         #   候选池不足或达到最大采样次数仍不足则淘汰,不按 ddG 强行补齐
+    # 边界采样能量上界固定为 0(ddG_contrib>=0 的残基舍弃),不可配置
+    e_full: -5.0         # 边界采样能量下界,ddG_contrib<=此值的残基必选(--e-full)
+    kT: 1.0              # 玻尔兹曼温度,越小越偏好强结合残基(--kT)
+    # limit: 0           # 只处理前 K 个 PDB(0=全部,用于快速测试)
+    # force: false       # 强制重算已有结果(含 cif→pdb 重转)
+    # 可用环境变量 PIPELINE_ROSETTA_ROOT 覆盖脚本默认位置;本配置里的显式值优先
+
+# ---- 按轮号覆盖默认参数(可选)----
+# 只写要改的键,会深合并进 defaults。没列出的轮次沿用 defaults。
+rounds:
+  1:
+    rfdiffusion:
+      num_designs: 16        # 第 1 轮多生成一些
+  2:
+    rfdiffusion:
+      noise_scale: 1.0       # 第 2 轮加大多样性

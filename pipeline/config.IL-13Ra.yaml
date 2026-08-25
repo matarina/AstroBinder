@@ -1,0 +1,72 @@
+# IL-13Rα 生产运行配置。
+#
+# 用法:
+#   python run_pipeline.py \
+#     --rifdock-input 'input/IL-13Rα' \
+#     --config pipeline/config.IL-13Ra.yaml
+#
+# target_res.list 使用 Rosetta pose 编号，原样传给 rifgen/rifdock。
+
+experiment:
+  target: IL-13Rα
+  output_root: pipeline_runs
+  rounds: 2
+  run_name: run_20260715_IL-13Ra
+
+seed:
+  rifdock:
+    target: 3lb6_target.pdb
+    target_res: target_res.list
+    # scaffold 与各靶点共享，路径相对 --rifdock-input 解析。
+    scaffold_subdir: ../scaffolds
+    threads: 16
+    # IL-13Rα 必须生成自己的 RIF 场，不能复用 IL-4Rα 的 rifdock.flag。
+    rifgen_extra: ""
+    rifdock_extra: ""
+
+defaults:
+  rfdiffusion:
+    num_designs: 8
+    num_seqs: 2
+    temp: "0.2"
+    noise_scale: 0.0
+    seed: 37
+    auto_gpu: true
+    task_vram: 8000
+    gpu_reserve: 0.10
+    gpu_sample: 5
+    gpu: "0"
+
+  af3:
+    mode: graft
+    auto_gpu: true
+    task_vram: 20000
+    gpu_reserve: 0.10
+    gpu_sample: 5
+    gpus: "4,5"
+    num_seeds: 8
+    force: false
+    keep_fraction: 0.3
+    seed: 1
+    template_mode: full
+    rmsd_max: 2.0
+    clash_dist: 2.0
+    clash_max: 5
+    top: 3
+
+  rosetta:
+    which: best
+    procs: 0
+    rosetta: /mnt/data2/wtk/software/rosetta/rosetta-2025.37-df75a9c
+    keep: 0.70
+    min_rif: 3
+    e_full: -5.0
+    kT: 1.0
+
+rounds:
+  1:
+    rfdiffusion:
+      num_designs: 16
+  2:
+    rfdiffusion:
+      noise_scale: 1.0

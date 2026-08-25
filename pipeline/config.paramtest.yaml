@@ -1,0 +1,84 @@
+# =====================================================================
+# 参数验证配置:规模介于 config.smoke.yaml(全压到 1,只求跑通) 与生产
+# config.yaml(16/8/8) 之间。目标是「用合理样本量跑通两轮、并能统计出
+# 各步真实的生成/通过率」,而非最小冒烟。
+# ---------------------------------------------------------------------
+# 用法:
+#   python run_pipeline.py \
+#     --rifdock-input input \
+#     --config pipeline/config.paramtest.yaml
+#
+# 与生产 config.yaml 的差异(都是「往小里调」,保留真实筛选门槛):
+#   - rfdiffusion: num_designs 4(round1=6)/num_seqs 2,limit=3(取上游前 3 个对接结果)
+#   - af3:        num_seeds 4(生产 8),keep_fraction 0.5,rmsd_max 保持真实 2.0(才能看通过率)
+#   - rosetta:    keep 0.7(真实筛选),procs 8
+# 每轮设计量: limit3 × num_designs × num_seqs = round1:36 / round2:24 条,
+# 足够统计 graft 通过率、rosetta 筛选率等「正确率」指标。
+# =====================================================================
+
+experiment:
+  target: null                    # 自动扫描 input 顶层唯一 *.pdb(IL-4Ra.pdb)
+  output_root: pipeline_runs      # 输出根目录
+  rounds: 2                       # 跑满两轮 round1 / round2
+  run_name: run_paramtest_IL-4Ra  # 独立 run,不污染生产/smoke;rifdock 只算一次,续跑自动跳过
+
+# ---- 种子步骤(round0_rifdock,只跑一次)----
+# 复用已算好的 rifgen 结果(docking_flag 指向 rifdock.flag,内含绝对路径的
+# RIF/xmap/target),只做对接,不重算 rifgen。
+seed:
+  rifdock:
+    target: null                  # 自动推断靶点 PDB
+    target_res: target_res.list
+    scaffold_subdir: scaffolds    # input/scaffolds 里 2 个 HHH_bc scaffold
+    threads: 16
+    docking_flag: rifdock.flag    # 复用已算好的 rifgen,跳过重算
+    rifgen_extra: ""
+    rifdock_extra: ""
+
+# ---- 循环步骤默认参数 ----
+defaults:
+  rfdiffusion:
+    num_designs: 4       # 每个输入 PDB 重扩散 4 个骨架
+    num_seqs: 2          # 每个骨架 MPNN 设计 2 条序列
+    temp: "0.2"
+    noise_scale: 0.0
+    seed: 37
+    limit: 3             # 只处理上游前 3 个对接结果(控制计算量,又不至于太少)
+    auto_gpu: true       # 自动挑空闲卡(当前 4/5 全空)
+    task_vram: 8000
+    gpu_reserve: 0.10
+    gpu_sample: 5
+    no_trajectory: true  # 不写逐步轨迹,省盘省 IO
+
+  af3:
+    mode: graft          # graft 路线(默认):折 binder 单链 + 短肽模板 → 叠合筛选
+    auto_gpu: true       # 自动挑空闲卡(每卡一路 AF3 worker,可与别人共享)
+    task_vram: 20000     # AF3 单 worker 估算显存(MiB),比 rfdiffusion 高
+    gpu_reserve: 0.10
+    gpu_sample: 5
+    gpus: "4,5"          # auto_gpu=false 时手动指定;auto_gpu=true 时作为兜底
+    num_seeds: 4         # 每 sample 4 个种子(总重复 = 4 × 5 扩散 = 20/设计),提高折对界面命中率
+    force: false
+    keep_fraction: 0.5   # 组内按 mpnn_score 保留一半进 AF3
+    seed: 1
+    template_mode: full  # 全长骨架模板,尽量约束短肽
+    rmsd_max: 2.0        # 保持生产真实门槛:RIF align RMSD ≤2Å 才算折对界面,用于统计通过率
+    clash_dist: 2.0
+    clash_max: 5
+    top: 3               # 每条设计写出通过筛选的前 3 个复合物
+
+  rosetta:
+    which: best          # 每设计取最优模型转 PDB
+    procs: 8             # FastRelax 并行进程
+    keep: 0.70           # 各维度保留前 70%(真实筛选)
+    e_full: -5.0
+    kT: 1.0
+
+# ---- 按轮号覆盖默认参数(验证深合并逻辑同时生效)----
+rounds:
+  1:
+    rfdiffusion:
+      num_designs: 6       # 第 1 轮多生成一些骨架
+  2:
+    rfdiffusion:
+      noise_scale: 0.5     # 第 2 轮加大多样性

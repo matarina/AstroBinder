@@ -1,0 +1,75 @@
+# =====================================================================
+# 冒烟测试配置:验证 rifdock → rfdiffusion+MPNN → AF3 → rosetta 两轮循环
+# 能端到端跑通。每个模型的生成量都压到最小,只求「跑通」不求「跑好」。
+# ---------------------------------------------------------------------
+# 用法:
+#   python run_pipeline.py \
+#     --rifdock-input input \
+#     --config pipeline/config.smoke.yaml
+#
+# 与生产 config.yaml 的差异都是「往小里调」:
+#   - rfdiffusion: num_designs/num_seqs=1,limit=2(只取前 2 个对接结果)
+#   - af3:        num_seeds=1,keep_fraction=1.0(设计太少不初筛,全留)
+#   - rosetta:    keep=1.0(全留,保证第 2 轮有输入),procs=4
+# =====================================================================
+
+experiment:
+  target: null                 # 自动扫描 input 顶层唯一 *.pdb 作靶点(IL-4Ra.pdb)
+  output_root: pipeline_runs    # 输出根目录
+  rounds: 2                     # 跑满两轮 round1 / round2
+  run_name: run_smoke_IL-4Ra    # 独立于生产 run,rifdock 只算一次,续跑自动跳过
+
+# ---- 种子步骤(round0_rifdock,只跑一次)----
+# 复用已算好的 rifgen 结果(docking_flag 指向 rifdock.flag,内含绝对路径的
+# RIF / xmap / target),只做对接,不重算 rifgen。
+seed:
+  rifdock:
+    target: null                # 自动推断靶点 PDB
+    target_res: target_res.list
+    scaffold_subdir: scaffolds  # input/scaffolds 里 2 个 HHH_bc scaffold
+    threads: 16
+    docking_flag: rifdock.flag  # 复用已算好的 rifgen,跳过重算
+    rifgen_extra: ""
+    rifdock_extra: ""
+
+# ---- 循环步骤默认参数(两轮共用,全部往小里调)----
+defaults:
+  rfdiffusion:
+    num_designs: 1       # 每个输入 PDB 只重扩散 1 个骨架
+    num_seqs: 1          # 每个骨架 MPNN 只设计 1 条序列
+    temp: "0.2"
+    noise_scale: 0.0
+    seed: 37
+    limit: 2             # 只处理上游前 2 个 PDB(冒烟测试,避免全量)
+    auto_gpu: true       # 自动挑空闲卡(当前 2/3/4/5 空闲)
+    task_vram: 8000
+    gpu_reserve: 0.10
+    gpu_sample: 5
+    no_trajectory: true  # 不写逐步轨迹,省盘省 IO
+
+  af3:
+    mode: graft          # 走 graft 路线(默认);只折 binder 单链 + 短肽模板 → 叠合筛选
+    auto_gpu: true       # 自动挑空闲卡(每卡一路 AF3 worker,可与别人共享)
+    task_vram: 20000     # AF3 单 worker 估算显存(MiB),比 rfdiffusion 高
+    gpu_reserve: 0.10
+    gpu_sample: 5
+    gpus: "2,3"          # auto_gpu=false 时手动指定;auto_gpu=true 时作为兜底
+    num_seeds: 1         # 每个 sample 只 1 个种子(最小重复)
+    force: false
+    keep_fraction: 1.0   # 设计太少,不做组内初筛,全部保留
+    seed: 1
+    template_mode: full  # 全长骨架模板,尽量约束住短肽
+    # 冒烟测试只求「端到端跑通」:样本极少(1种子×5扩散=5/设计),RIF RMSD 门槛放宽,
+    # 避免全部被 2Å 门槛卡掉导致 graft 后 0 通过而报错。生产 config 用 2.0。
+    rmsd_max: 99.0
+    clash_max: 9999
+    top: 3
+
+  rosetta:
+    which: best          # 每个设计只取最优模型转 PDB
+    procs: 4             # FastRelax 并行进程(小规模够用)
+    keep: 1.0            # 全留,保证第 2 轮 rfdiffusion 有输入
+    min_rif: 3           # 界面至少选出 3 个 rif(随机采样+不足则 ddG 最负补齐);候选池不足则淘汰
+
+# ---- 两轮都用 defaults,无需按轮覆盖 ----
+rounds: {}
